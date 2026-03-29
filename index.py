@@ -58,6 +58,11 @@ class InvertedIndex:
         self.doc_length = {}    # key: doc ID (int), value: document length (number of tokens)
                                 # Ini nantinya akan berguna untuk normalisasi Score terhadap panjang
                                 # dokumen saat menghitung score dengan TF-IDF atau BM25
+        self.collection_stats = {
+            'total_doc_length': 0,
+            'num_docs': 0,
+            'avg_doc_length': 0.0,
+        }
 
     def __enter__(self):
         """
@@ -84,7 +89,21 @@ class InvertedIndex:
 
         # Kita muat postings dict dan terms iterator dari file metadata
         with open(self.metadata_file_path, 'rb') as f:
-            self.postings_dict, self.terms, self.doc_length = pickle.load(f)
+            metadata = pickle.load(f)
+            
+            if len(metadata) == 3:
+                self.postings_dict, self.terms, self.doc_length = metadata
+                total_doc_length = sum(self.doc_length.values())
+                num_docs = len(self.doc_length)
+                avg_doc_length = (total_doc_length / num_docs) if num_docs > 0 else 0.0
+                self.collection_stats = {
+                    'total_doc_length': total_doc_length,
+                    'num_docs': num_docs,
+                    'avg_doc_length': avg_doc_length,
+                }
+            else:
+                self.postings_dict, self.terms, self.doc_length, self.collection_stats = metadata
+
             self.term_iter = self.terms.__iter__()
 
         return self
@@ -94,9 +113,17 @@ class InvertedIndex:
         # Menutup index file
         self.index_file.close()
 
+        total_doc_length = sum(self.doc_length.values())
+        num_docs = len(self.doc_length)
+        self.collection_stats = {
+            'total_doc_length': total_doc_length,
+            'num_docs': num_docs,
+            'avg_doc_length': (total_doc_length / num_docs) if num_docs > 0 else 0.0,
+        }
+
         # Menyimpan metadata (postings dict dan terms) ke file metadata dengan bantuan pickle
         with open(self.metadata_file_path, 'wb') as f:
-            pickle.dump([self.postings_dict, self.terms, self.doc_length], f)
+            pickle.dump([self.postings_dict, self.terms, self.doc_length, self.collection_stats], f)
 
 
 class InvertedIndexReader(InvertedIndex):
@@ -206,7 +233,14 @@ class InvertedIndexWriter(InvertedIndex):
             doc_id, freq = postings_list[i], tf_list[i]
             if doc_id not in self.doc_length:
                 self.doc_length[doc_id] = 0
+                self.collection_stats['num_docs'] += 1
             self.doc_length[doc_id] += freq
+            self.collection_stats['total_doc_length'] += freq
+
+        if self.collection_stats['num_docs'] > 0:
+            self.collection_stats['avg_doc_length'] = self.collection_stats['total_doc_length'] / self.collection_stats['num_docs']
+        else:
+            self.collection_stats['avg_doc_length'] = 0.0
 
         self.index_file.seek(0, os.SEEK_END)
         curr_position_in_byte = self.index_file.tell()
@@ -228,6 +262,7 @@ if __name__ == "__main__":
         index.index_file.seek(0)
         assert index.terms == [1,2], "terms salah"
         assert index.doc_length == {2:2, 3:38, 4:25, 5:56, 8:3, 10:30}, "doc_length salah"
+        assert index.collection_stats == {'total_doc_length': 154, 'num_docs': 6, 'avg_doc_length': 154 / 6}, "collection_stats salah"
         assert index.postings_dict == {1: (0, \
                                            5, \
                                            len(VBEPostings.encode([2,3,4,8,10])), \

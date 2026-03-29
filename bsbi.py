@@ -4,11 +4,26 @@ import contextlib
 import heapq
 import time
 import math
+import argparse
 
 from index import InvertedIndexReader, InvertedIndexWriter
 from util import IdMap, sorted_merge_posts_and_tfs
-from compression import StandardPostings, VBEPostings
+from compression import StandardPostings, VBEPostings, EliasGammaPostings
 from tqdm import tqdm
+
+
+COMPRESSION_ENCODINGS = {
+    'standard': StandardPostings,
+    'vbe': VBEPostings,
+    'elias-gamma': EliasGammaPostings,
+}
+
+
+def get_postings_encoding(compression_name):
+    key = compression_name.lower()
+    if key not in COMPRESSION_ENCODINGS:
+        raise ValueError("compression harus salah satu dari: standard, vbe, elias-gamma")
+    return COMPRESSION_ENCODINGS[key]
 
 class BSBIIndex:
     """
@@ -223,6 +238,92 @@ class BSBIIndex:
             docs = [(score, self.doc_id_map[doc_id]) for (doc_id, score) in scores.items()]
             return sorted(docs, key = lambda x: x[0], reverse = True)[:k]
 
+    def retrieve_bm25(self, query, k = 10, k1 = 1.2, b = 0.75):
+        """
+        Melakukan Ranked Retrieval dengan skema BM25.
+
+        score(D, Q) = sigma_{t di Q} idf(t) * ((tf(t, D) * (k1 + 1)) /
+                       (tf(t, D) + k1 * (1 - b + b * |D| / avgdl)))
+
+        idf(t) = log(1 + ((N - df(t) + 0.5) / (df(t) + 0.5)))
+
+        Parameters
+        ----------
+        query: str
+            Query tokens yang dipisahkan oleh spasi
+        k: int
+            Jumlah dokumen teratas yang dikembalikan
+        k1: float
+            Parameter pengendali saturasi TF
+        b: float
+            Parameter normalisasi panjang dokumen
+
+        Result
+        ------
+        List[(float, str)]
+            List of tuple: elemen pertama adalah score similarity,
+            dan elemen kedua adalah nama dokumen.
+        """
+        if len(self.term_id_map) == 0 or len(self.doc_id_map) == 0:
+            self.load()
+
+        terms = [self.term_id_map[word] for word in query.split()]
+        with InvertedIndexReader(self.index_name, self.postings_encoding, directory=self.output_dir) as merged_index:
+
+            N = merged_index.collection_stats.get('num_docs', len(merged_index.doc_length))
+            avg_dl = merged_index.collection_stats.get('avg_doc_length', 0.0)
+
+            if N == 0:
+                return []
+
+            if avg_dl <= 0:
+                avg_dl = 1.0
+
+            scores = {}
+            for term in terms:
+                if term in merged_index.postings_dict:
+                    df = merged_index.postings_dict[term][1]
+                    idf = math.log(1 + ((N - df + 0.5) / (df + 0.5)))
+                    postings, tf_list = merged_index.get_postings_list(term)
+
+                    for i in range(len(postings)):
+                        doc_id, tf = postings[i], tf_list[i]
+                        if tf <= 0:
+                            continue
+
+                        dl = merged_index.doc_length.get(doc_id, 0)
+                        denom = tf + k1 * (1 - b + b * (dl / avg_dl))
+                        bm25_term_score = idf * ((tf * (k1 + 1)) / denom)
+
+                        if doc_id not in scores:
+                            scores[doc_id] = 0.0
+                        scores[doc_id] += bm25_term_score
+
+            docs = [(score, self.doc_id_map[doc_id]) for (doc_id, score) in scores.items()]
+            return sorted(docs, key = lambda x: x[0], reverse = True)[:k]
+
+    def retrieve(self, query, k = 10, scoring = 'tfidf', **kwargs):
+        """
+        Wrapper retrieval untuk memilih skema scoring.
+
+        Parameters
+        ----------
+        query: str
+            Query tokens yang dipisahkan oleh spasi
+        k: int
+            Jumlah dokumen teratas yang dikembalikan
+        scoring: str
+            Pilihan skema scoring: 'tfidf' atau 'bm25'
+        kwargs:
+            Parameter tambahan untuk skema tertentu (misalnya k1, b untuk BM25)
+        """
+        scoring = scoring.lower()
+        if scoring == 'tfidf':
+            return self.retrieve_tfidf(query, k = k)
+        if scoring == 'bm25':
+            return self.retrieve_bm25(query, k = k, k1 = kwargs.get('k1', 1.2), b = kwargs.get('b', 0.75))
+        raise ValueError("scoring harus 'tfidf' atau 'bm25'")
+
     def index(self):
         """
         Base indexing code
@@ -252,8 +353,13 @@ class BSBIIndex:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Build BSBI inverted index')
+    parser.add_argument('--compression', default='elias-gamma',
+                        choices=['standard', 'vbe', 'elias-gamma'],
+                        help='Jenis kompresi postings')
+    args = parser.parse_args()
 
     BSBI_instance = BSBIIndex(data_dir = 'collection', \
-                              postings_encoding = VBEPostings, \
+                              postings_encoding = get_postings_encoding(args.compression), \
                               output_dir = 'index')
     BSBI_instance.index() # memulai indexing!

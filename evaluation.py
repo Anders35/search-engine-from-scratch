@@ -1,6 +1,6 @@
+import argparse
 import re
-from bsbi import BSBIIndex
-from compression import VBEPostings
+from bsbi import BSBIIndex, get_postings_encoding
 
 ######## >>>>> sebuah IR metric: RBP p = 0.8
 
@@ -53,14 +53,15 @@ def load_qrels(qrel_file = "qrels.txt", max_q_id = 30, max_doc_id = 1033):
 
 ######## >>>>> EVALUASI !
 
-def eval(qrels, query_file = "queries.txt", k = 1000):
+def eval(qrels, query_file = "queries.txt", k = 1000, scoring = 'tfidf', k1 = 1.2, b = 0.75,
+         compression = 'elias-gamma'):
   """ 
     loop ke semua 30 query, hitung score di setiap query,
     lalu hitung MEAN SCORE over those 30 queries.
     untuk setiap query, kembalikan top-1000 documents
   """
   BSBI_instance = BSBIIndex(data_dir = 'collection', \
-                          postings_encoding = VBEPostings, \
+                          postings_encoding = get_postings_encoding(compression), \
                           output_dir = 'index')
 
   with open(query_file) as file:
@@ -73,18 +74,32 @@ def eval(qrels, query_file = "queries.txt", k = 1000):
       # HATI-HATI, doc id saat indexing bisa jadi berbeda dengan doc id
       # yang tertera di qrels
       ranking = []
-      for (score, doc) in BSBI_instance.retrieve_tfidf(query, k = k):
-          did = int(re.search(r'\/.*\/.*\/(.*)\.txt', doc).group(1))
-          ranking.append(qrels[qid][did])
+      for (score, doc) in BSBI_instance.retrieve(query, k = k, scoring = scoring, k1 = k1, b = b):
+        did = int(re.search(r'\/.*\/.*\/(.*)\.txt', doc).group(1))
+        ranking.append(qrels[qid][did])
       rbp_scores.append(rbp(ranking))
 
-  print("Hasil evaluasi TF-IDF terhadap 30 queries")
+  print(f"Hasil evaluasi {scoring.upper()} terhadap 30 queries")
   print("RBP score =", sum(rbp_scores) / len(rbp_scores))
 
 if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description='Evaluasi retrieval dengan RBP')
+  parser.add_argument('--compression', default='elias-gamma',
+                      choices=['standard', 'vbe', 'elias-gamma'],
+                      help='Jenis kompresi postings yang dipakai saat membaca index')
+  parser.add_argument('--scoring', default='all', choices=['all', 'tfidf', 'bm25'],
+                      help='Skema scoring yang dievaluasi')
+  parser.add_argument('-k', type=int, default=1000, help='Top-K dokumen per query untuk evaluasi')
+  parser.add_argument('--k1', type=float, default=1.2, help='Parameter BM25 k1')
+  parser.add_argument('--b', type=float, default=0.75, help='Parameter BM25 b')
+  args = parser.parse_args()
+
   qrels = load_qrels()
 
   assert qrels["Q1"][166] == 1, "qrels salah"
   assert qrels["Q1"][300] == 0, "qrels salah"
 
-  eval(qrels)
+  if args.scoring in ['all', 'tfidf']:
+    eval(qrels, k = args.k, scoring = 'tfidf', compression = args.compression)
+  if args.scoring in ['all', 'bm25']:
+    eval(qrels, k = args.k, scoring = 'bm25', k1 = args.k1, b = args.b, compression = args.compression)
