@@ -3,6 +3,10 @@
 ## Features
 
 - SPIMI-based indexing pipeline (default), with optional BSBI compatibility mode.
+- Consistent text preprocessing for indexing and querying:
+  - Case folding
+  - English stopword removal
+  - Porter stemming
 - Term dictionary organized with a minimized Finite State Transducer (FST), merging states with equivalent suffix/right-language.
 - Positional indexing support (stores token positions per term-document pair).
 - Multiple postings compression options:
@@ -117,8 +121,43 @@ Parameters:
 - `--lsi-n-iter`: randomized SVD iterations for LSI evaluation
 - `--rebuild-lsi`: force rebuilding LSI artifacts before evaluation
 
+Notes:
+
+- Evaluation CLI currently covers `tfidf`, `bm25`, and `lsi` (plus `all`).
+- `phrase` and `proximity` retrieval are available in `search.py`.
+- If you change preprocessing settings or logic, rebuild the index before search/evaluation.
+
 Example BM25-only evaluation:
 
 ```bash
 python evaluation.py --compression elias-gamma --scoring bm25 --bm25 taat -k 1000 --k1 1.2 --b 0.75
 ```
+
+## Benchmark Results
+
+The following results were obtained on the provided 30-query benchmark
+(`queries.txt` and `qrels.txt`) using this setup:
+
+- Indexing mode: `spimi`
+- Compression: `elias-gamma`
+- BM25 retrieval mode: `wand`
+- Top-k: `1000`
+- Preprocessing: case folding, English stopword removal, Porter stemming
+
+Command sequence used:
+
+```bash
+python bsbi.py --compression elias-gamma --indexing-mode spimi
+python evaluation.py --compression elias-gamma --scoring all
+```
+
+| Method | RBP | DCG | NDCG | AP |
+|---|---:|---:|---:|---:|
+| TF-IDF | 0.645676 | 5.817229 | 0.768342 | 0.494340 |
+| BM25 (WAND) | 0.673422 | 5.937515 | 0.785770 | 0.526705 |
+| LSI | 0.752534 | 6.648390 | 0.867610 | 0.638507 |
+
+Notes:
+
+- Scores may change if preprocessing, indexing parameters, or retrieval parameters are modified.
+- Rebuild the index before re-running evaluation after changing preprocessing settings.
