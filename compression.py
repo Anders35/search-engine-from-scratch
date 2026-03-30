@@ -83,6 +83,46 @@ class StandardPostings:
         """
         return StandardPostings.decode(encoded_tf_list)
 
+    @staticmethod
+    def encode_positions(positions_list):
+        """
+        Encode positional postings.
+
+        positions_list is List[List[int]], aligned with doc order in postings list.
+        Each document positions list is converted to gap form, then flattened.
+        """
+        flat_gaps = []
+        for positions in positions_list:
+            if not positions:
+                continue
+            prev = 0
+            for p in positions:
+                flat_gaps.append(p - prev)
+                prev = p
+        return StandardPostings.encode_tf(flat_gaps)
+
+    @staticmethod
+    def decode_positions(encoded_positions, tf_list):
+        """
+        Decode positional postings using tf_list as per-document positions count.
+        """
+        flat_gaps = StandardPostings.decode_tf(encoded_positions)
+        positions_list = []
+        cursor = 0
+
+        for tf in tf_list:
+            doc_gaps = flat_gaps[cursor:cursor + tf]
+            cursor += tf
+
+            doc_positions = []
+            total = 0
+            for gap in doc_gaps:
+                total += gap
+                doc_positions.append(total)
+            positions_list.append(doc_positions)
+
+        return positions_list
+
 class VBEPostings:
     """ 
     For VBEPostings, postings are stored as gaps (except the first posting),
@@ -217,6 +257,39 @@ class VBEPostings:
             List of term frequencies decoded from encoded_tf_list
         """
         return VBEPostings.vb_decode(encoded_tf_list)
+
+    @staticmethod
+    def encode_positions(positions_list):
+        """Encode positional postings with gap representation per document."""
+        flat_gaps = []
+        for positions in positions_list:
+            if not positions:
+                continue
+            prev = 0
+            for p in positions:
+                flat_gaps.append(p - prev)
+                prev = p
+        return VBEPostings.encode_tf(flat_gaps)
+
+    @staticmethod
+    def decode_positions(encoded_positions, tf_list):
+        """Decode positional postings using tf_list as per-document positions count."""
+        flat_gaps = VBEPostings.decode_tf(encoded_positions)
+        positions_list = []
+        cursor = 0
+
+        for tf in tf_list:
+            doc_gaps = flat_gaps[cursor:cursor + tf]
+            cursor += tf
+
+            doc_positions = []
+            total = 0
+            for gap in doc_gaps:
+                total += gap
+                doc_positions.append(total)
+            positions_list.append(doc_positions)
+
+        return positions_list
 
 
 class EliasGammaPostings:
@@ -406,23 +479,62 @@ class EliasGammaPostings:
         """
         return EliasGammaPostings._gamma_decode(encoded_tf_list)
 
+    @staticmethod
+    def encode_positions(positions_list):
+        """Encode positional postings with gap representation per document."""
+        flat_gaps = []
+        for positions in positions_list:
+            if not positions:
+                continue
+            prev = 0
+            for p in positions:
+                flat_gaps.append(p - prev)
+                prev = p
+        return EliasGammaPostings.encode_tf(flat_gaps)
+
+    @staticmethod
+    def decode_positions(encoded_positions, tf_list):
+        """Decode positional postings using tf_list as per-document positions count."""
+        flat_gaps = EliasGammaPostings.decode_tf(encoded_positions)
+        positions_list = []
+        cursor = 0
+
+        for tf in tf_list:
+            doc_gaps = flat_gaps[cursor:cursor + tf]
+            cursor += tf
+
+            doc_positions = []
+            total = 0
+            for gap in doc_gaps:
+                total += gap
+                doc_positions.append(total)
+            positions_list.append(doc_positions)
+
+        return positions_list
+
 if __name__ == '__main__':
     
     postings_list = [34, 67, 89, 454, 2345738]
     tf_list = [12, 10, 3, 4, 1]
+    positions_list = [[2, 10], [1], [3, 7, 9], [5], [4, 8]]
     for Postings in [StandardPostings, VBEPostings, EliasGammaPostings]:
         print(Postings.__name__)
         encoded_postings_list = Postings.encode(postings_list)
         encoded_tf_list = Postings.encode_tf(tf_list)
+        encoded_positions = Postings.encode_positions(positions_list)
         print("encoded postings bytes: ", encoded_postings_list)
         print("encoded postings size : ", len(encoded_postings_list), "bytes")
         print("encoded TF list bytes : ", encoded_tf_list)
         print("encoded TF list size  : ", len(encoded_tf_list), "bytes")
+        print("encoded positions size: ", len(encoded_positions), "bytes")
         
         decoded_posting_list = Postings.decode(encoded_postings_list)
         decoded_tf_list = Postings.decode_tf(encoded_tf_list)
+        decoded_positions = Postings.decode_positions(encoded_positions, [len(p) for p in positions_list])
         print("decoded postings: ", decoded_posting_list)
         print("decoded TF list : ", decoded_tf_list)
+        print("decoded positions:", decoded_positions)
         assert decoded_posting_list == postings_list, "decoded postings do not match original postings"
         assert decoded_tf_list == tf_list, "decoded TF list does not match original TF list"
+        assert decoded_positions == positions_list, "decoded positions do not match original positions"
         print()

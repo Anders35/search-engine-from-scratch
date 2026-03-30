@@ -4,6 +4,7 @@
 
 - SPIMI-based indexing pipeline (default), with optional BSBI compatibility mode.
 - Term dictionary organized with a minimized Finite State Transducer (FST), merging states with equivalent suffix/right-language.
+- Positional indexing support (stores token positions per term-document pair).
 - Multiple postings compression options:
   - Standard (raw integer array)
   - Variable-Byte Encoding (VBE)
@@ -13,6 +14,8 @@
   - BM25 with two modes:
     - TAAT (Term-at-a-Time)
     - WAND (faster top-k pruning)
+  - Exact phrase retrieval using positional postings (`--scoring phrase`)
+  - Proximity retrieval with configurable token window (`--scoring proximity --window N`)
 - Evaluation module over 30 benchmark queries using:
   - RBP
   - DCG
@@ -24,7 +27,7 @@
 - `bsbi.py`: Build inverted index with `spimi` (default) or `bsbi` mode, then merge into one main index.
 - `search.py`: Run ranked retrieval for sample queries.
 - `evaluation.py`: Evaluate retrieval quality using `queries.txt` and `qrels.txt`.
-- `index.py`: Disk-based inverted index reader/writer.
+- `index.py`: Disk-based inverted index reader/writer (postings, TF, positions).
 - `compression.py`: Postings compression codecs.
 - `util.py`: Utilities (IdMap, FSTTermMap, postings merge helper).
 - `collection/`: Document collection (grouped by blocks/folders).
@@ -80,8 +83,9 @@ python search.py --compression elias-gamma --scoring bm25 --bm25 wand -k 10
 Parameters:
 
 - `--compression`: postings encoding used by the index
-- `--scoring`: `tfidf` or `bm25`
+- `--scoring`: `tfidf`, `bm25`, `phrase`, or `proximity`
 - `--bm25`: `wand` or `taat` (used when `--scoring bm25`)
+- `--window`: maximum positional window for proximity search (used when `--scoring proximity`)
 - `-k`: number of top documents to return
 
 Important:

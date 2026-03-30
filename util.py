@@ -325,6 +325,52 @@ def sorted_merge_posts_and_tfs(posts_tfs1, posts_tfs2):
         j += 1
     return merge
 
+
+def sorted_merge_posts_tfs_positions(posts_tfs_pos1, posts_tfs_pos2):
+    """
+    Merge two sorted lists of tuples (doc_id, tf, positions).
+
+    If the same doc_id appears in both lists, TF is accumulated and positions
+    are merged in sorted order.
+
+    Parameters
+    ----------
+    posts_tfs_pos1: List[Tuple[int, int, List[int]]]
+    posts_tfs_pos2: List[Tuple[int, int, List[int]]]
+
+    Returns
+    -------
+    List[Tuple[int, int, List[int]]]
+        Sorted merged result by doc_id.
+    """
+    i, j = 0, 0
+    merged = []
+
+    while i < len(posts_tfs_pos1) and j < len(posts_tfs_pos2):
+        doc1, tf1, pos1 = posts_tfs_pos1[i]
+        doc2, tf2, pos2 = posts_tfs_pos2[j]
+
+        if doc1 == doc2:
+            merged.append((doc1, tf1 + tf2, sorted(pos1 + pos2)))
+            i += 1
+            j += 1
+        elif doc1 < doc2:
+            merged.append((doc1, tf1, pos1))
+            i += 1
+        else:
+            merged.append((doc2, tf2, pos2))
+            j += 1
+
+    while i < len(posts_tfs_pos1):
+        merged.append(posts_tfs_pos1[i])
+        i += 1
+
+    while j < len(posts_tfs_pos2):
+        merged.append(posts_tfs_pos2[j])
+        j += 1
+
+    return merged
+
 def test(output, expected):
     """ simple function for testing """
     return "PASSED" if output == expected else "FAILED"
@@ -364,3 +410,9 @@ if __name__ == '__main__':
 
     assert sorted_merge_posts_and_tfs([(1, 34), (3, 2), (4, 23)], \
                                       [(1, 11), (2, 4), (4, 3 ), (6, 13)]) == [(1, 45), (2, 4), (3, 2), (4, 26), (6, 13)], "sorted_merge_posts_and_tfs is incorrect"
+
+    merged_pos = sorted_merge_posts_tfs_positions(
+        [(1, 2, [1, 3]), (4, 1, [2])],
+        [(1, 1, [5]), (2, 2, [1, 4])]
+    )
+    assert merged_pos == [(1, 3, [1, 3, 5]), (2, 2, [1, 4]), (4, 1, [2])], "sorted_merge_posts_tfs_positions is incorrect"

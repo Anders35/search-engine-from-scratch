@@ -7,7 +7,7 @@ import math
 import argparse
 
 from index import InvertedIndexReader, InvertedIndexWriter
-from util import IdMap, FSTTermMap, sorted_merge_posts_and_tfs
+from util import IdMap, FSTTermMap, sorted_merge_posts_tfs_positions
 from compression import StandardPostings, VBEPostings, EliasGammaPostings
 from tqdm import tqdm
 
@@ -70,7 +70,7 @@ class BSBIIndex:
 
     def parse_block(self, block_dir_relative):
         """
-        Parse text files into a sequence of <termID, docID> pairs.
+        Parse text files into a sequence of <termID, docID, position> triples.
 
         Parameters
         ----------
@@ -81,8 +81,8 @@ class BSBIIndex:
 
         Returns
         -------
-        List[Tuple[Int, Int]]
-            All td_pairs extracted from the block.
+        List[Tuple[Int, Int, Int]]
+            All term-doc-position triples extracted from the block.
 
         Uses self.term_id_map and self.doc_id_map to obtain termIDs and docIDs.
         These mappings persist across parse_block(...) calls.
@@ -92,14 +92,14 @@ class BSBIIndex:
         for filename in next(os.walk(dir))[2]:
             docname = dir + "/" + filename
             with open(docname, "r", encoding = "utf8", errors = "surrogateescape") as f:
-                for token in f.read().split():
-                    td_pairs.append((self.term_id_map[token], self.doc_id_map[docname]))
+                for position, token in enumerate(f.read().split(), start = 1):
+                    td_pairs.append((self.term_id_map[token], self.doc_id_map[docname], position))
 
         return td_pairs
 
     def invert_write(self, td_pairs, index):
         """
-        Invert td_pairs (list of <termID, docID> pairs) and write them to index.
+        Invert td_pairs (list of <termID, docID, position> triples) and write to index.
 
         Uses one dictionary per block during inversion, and stores both
         sorted docIDs and their TF values.
@@ -108,25 +108,24 @@ class BSBIIndex:
 
         Parameters
         ----------
-        td_pairs: List[Tuple[Int, Int]]
-            List of termID-docID pairs
+        td_pairs: List[Tuple[Int, Int, Int]]
+            List of termID-docID-position triples
         index: InvertedIndexWriter
             Disk-based inverted index associated with a block
         """
-        term_dict = {}
-        term_tf = {}
-        for term_id, doc_id in td_pairs:
-            if term_id not in term_dict:
-                term_dict[term_id] = set()
-                term_tf[term_id] = {}
-            term_dict[term_id].add(doc_id)
-            if doc_id not in term_tf[term_id]:
-                term_tf[term_id][doc_id] = 0
-            term_tf[term_id][doc_id] += 1
-        for term_id in sorted(term_dict.keys()):
-            sorted_doc_id = sorted(list(term_dict[term_id]))
-            assoc_tf = [term_tf[term_id][doc_id] for doc_id in sorted_doc_id]
-            index.append(term_id, sorted_doc_id, assoc_tf)
+        term_positions = {}
+        for term_id, doc_id, position in td_pairs:
+            if term_id not in term_positions:
+                term_positions[term_id] = {}
+            if doc_id not in term_positions[term_id]:
+                term_positions[term_id][doc_id] = []
+            term_positions[term_id][doc_id].append(position)
+
+        for term_id in sorted(term_positions.keys()):
+            sorted_doc_id = sorted(list(term_positions[term_id].keys()))
+            assoc_positions = [term_positions[term_id][doc_id] for doc_id in sorted_doc_id]
+            assoc_tf = [len(positions) for positions in assoc_positions]
+            index.append(term_id, sorted_doc_id, assoc_tf, assoc_positions)
 
     def merge(self, indices, merged_index):
         """
@@ -134,7 +133,7 @@ class BSBIIndex:
 
         This is the EXTERNAL MERGE SORT step.
 
-        Uses sorted_merge_posts_and_tfs(..) from util.
+        Uses sorted_merge_posts_tfs_positions(..) from util.
 
         Parameters
         ----------
@@ -147,17 +146,20 @@ class BSBIIndex:
         """
         # Assumes there is at least one term.
         merged_iter = heapq.merge(*indices, key = lambda x: x[0])
-        curr, postings, tf_list = next(merged_iter) # first item
-        for t, postings_, tf_list_ in merged_iter: # from the second item
+        curr, postings, tf_list, positions_list = next(merged_iter) # first item
+        for t, postings_, tf_list_, positions_list_ in merged_iter: # from the second item
             if t == curr:
-                zip_p_tf = sorted_merge_posts_and_tfs(list(zip(postings, tf_list)), \
-                                                      list(zip(postings_, tf_list_)))
-                postings = [doc_id for (doc_id, _) in zip_p_tf]
-                tf_list = [tf for (_, tf) in zip_p_tf]
+                zip_p_tf_pos = sorted_merge_posts_tfs_positions(
+                    list(zip(postings, tf_list, positions_list)),
+                    list(zip(postings_, tf_list_, positions_list_))
+                )
+                postings = [doc_id for (doc_id, _, _) in zip_p_tf_pos]
+                tf_list = [tf for (_, tf, _) in zip_p_tf_pos]
+                positions_list = [positions for (_, _, positions) in zip_p_tf_pos]
             else:
-                merged_index.append(curr, postings, tf_list)
-                curr, postings, tf_list = t, postings_, tf_list_
-        merged_index.append(curr, postings, tf_list)
+                merged_index.append(curr, postings, tf_list, positions_list)
+                curr, postings, tf_list, positions_list = t, postings_, tf_list_, positions_list_
+        merged_index.append(curr, postings, tf_list, positions_list)
 
     def _get_query_term_ids(self, query):
         """Return term IDs that actually exist in the index vocabulary."""
@@ -167,6 +169,57 @@ class BSBIIndex:
             if term_id is not None:
                 term_ids.append(term_id)
         return term_ids
+
+    @staticmethod
+    def _phrase_step(left_positions, right_positions):
+        """Return right-term positions that directly follow left-term positions."""
+        i, j = 0, 0
+        matched = []
+        while i < len(left_positions) and j < len(right_positions):
+            target = left_positions[i] + 1
+            if right_positions[j] == target:
+                matched.append(right_positions[j])
+                i += 1
+                j += 1
+            elif right_positions[j] < target:
+                j += 1
+            else:
+                i += 1
+        return matched
+
+    @staticmethod
+    def _min_cover_span(position_lists):
+        """Return shortest span covering at least one position from each list."""
+        if not position_lists or any(len(pos) == 0 for pos in position_lists):
+            return None
+
+        heap = []
+        pointers = [0] * len(position_lists)
+        current_max = -1
+
+        for i, positions in enumerate(position_lists):
+            value = positions[0]
+            heapq.heappush(heap, (value, i))
+            if value > current_max:
+                current_max = value
+
+        best_span = None
+        while True:
+            current_min, list_idx = heapq.heappop(heap)
+            span = current_max - current_min + 1
+            if best_span is None or span < best_span:
+                best_span = span
+
+            pointers[list_idx] += 1
+            if pointers[list_idx] >= len(position_lists[list_idx]):
+                break
+
+            next_value = position_lists[list_idx][pointers[list_idx]]
+            heapq.heappush(heap, (next_value, list_idx))
+            if next_value > current_max:
+                current_max = next_value
+
+        return best_span
 
     @staticmethod
     def _bm25_term_score(tf, dl, avg_dl, idf, k1, b):
@@ -421,6 +474,95 @@ class BSBIIndex:
             return self.retrieve_bm25_wand(query, k = k, k1 = k1, b = b)
         return self.retrieve_bm25_taat(query, k = k, k1 = k1, b = b)
 
+    def retrieve_phrase(self, query, k = 10):
+        """
+        Perform exact phrase retrieval using positional postings.
+
+        Returns top-K docs ranked by phrase frequency.
+        """
+        if len(self.term_id_map) == 0 or len(self.doc_id_map) == 0:
+            self.load()
+
+        terms = self._get_query_term_ids(query)
+        if k <= 0 or not terms:
+            return []
+
+        with InvertedIndexReader(self.index_name, self.postings_encoding, directory = self.output_dir) as merged_index:
+            term_docs_positions = []
+            for term in terms:
+                if term not in merged_index.postings_dict:
+                    return []
+                postings, tf_list, positions_list = merged_index.get_postings_with_positions(term)
+                doc_to_positions = {postings[i]: positions_list[i] for i in range(len(postings))}
+                term_docs_positions.append(doc_to_positions)
+
+            candidate = term_docs_positions[0]
+            for i in range(1, len(term_docs_positions)):
+                next_docs = term_docs_positions[i]
+                new_candidate = {}
+                for doc_id, left_positions in candidate.items():
+                    if doc_id not in next_docs:
+                        continue
+                    matched = self._phrase_step(left_positions, next_docs[doc_id])
+                    if matched:
+                        new_candidate[doc_id] = matched
+                candidate = new_candidate
+                if not candidate:
+                    return []
+
+            docs = [(len(pos_list), self.doc_id_map[doc_id]) for doc_id, pos_list in candidate.items()]
+            return sorted(docs, key = lambda x: x[0], reverse = True)[:k]
+
+    def retrieve_proximity(self, query, k = 10, window = 5):
+        """
+        Perform proximity retrieval using positional postings.
+
+        A document matches if all query terms appear within a minimum covering
+        span <= window. Results are ranked by 1 / min_span.
+        """
+        if len(self.term_id_map) == 0 or len(self.doc_id_map) == 0:
+            self.load()
+
+        if k <= 0:
+            return []
+        if window <= 0:
+            raise ValueError("window must be a positive integer")
+
+        raw_terms = query.split()
+        if len(raw_terms) < 2:
+            return []
+
+        term_ids = []
+        for word in raw_terms:
+            term_id = self.term_id_map.get_id_if_exists(word)
+            if term_id is None:
+                return []
+            term_ids.append(term_id)
+
+        with InvertedIndexReader(self.index_name, self.postings_encoding, directory = self.output_dir) as merged_index:
+            per_term_positions = []
+            for term_id in term_ids:
+                if term_id not in merged_index.postings_dict:
+                    return []
+                postings, tf_list, positions_list = merged_index.get_postings_with_positions(term_id)
+                per_term_positions.append({postings[i]: positions_list[i] for i in range(len(postings))})
+
+            candidate_docs = set(per_term_positions[0].keys())
+            for doc_map in per_term_positions[1:]:
+                candidate_docs &= set(doc_map.keys())
+            if not candidate_docs:
+                return []
+
+            scored_docs = []
+            for doc_id in candidate_docs:
+                doc_position_lists = [doc_map[doc_id] for doc_map in per_term_positions]
+                min_span = self._min_cover_span(doc_position_lists)
+                if min_span is None or min_span > window:
+                    continue
+                scored_docs.append((1.0 / float(min_span), self.doc_id_map[doc_id]))
+
+            return sorted(scored_docs, key = lambda x: x[0], reverse = True)[:k]
+
     def retrieve(self, query, k = 10, scoring = 'tfidf', **kwargs):
         """
         Retrieval wrapper for selecting scoring scheme.
@@ -432,9 +574,10 @@ class BSBIIndex:
         k: int
             Number of top documents to return
         scoring: str
-            Scoring scheme: 'tfidf' or 'bm25'
+            Scoring scheme: 'tfidf', 'bm25', 'phrase', or 'proximity'
         kwargs:
-            Extra parameters for specific schemes (e.g., k1, b for BM25)
+            Extra parameters for specific schemes (e.g., k1, b for BM25,
+            window for proximity search)
         """
         scoring = scoring.lower()
         if scoring == 'tfidf':
@@ -445,7 +588,13 @@ class BSBIIndex:
                                       k1 = kwargs.get('k1', 1.2),
                                       b = kwargs.get('b', 0.75),
                                       use_wand = kwargs.get('use_wand', True))
-        raise ValueError("scoring must be 'tfidf' or 'bm25'")
+        if scoring == 'phrase':
+            return self.retrieve_phrase(query, k = k)
+        if scoring == 'proximity':
+            return self.retrieve_proximity(query,
+                                           k = k,
+                                           window = kwargs.get('window', 5))
+        raise ValueError("scoring must be 'tfidf', 'bm25', 'phrase', or 'proximity'")
 
     def index(self):
         """
@@ -481,10 +630,11 @@ class SPIMIIndex(BSBIIndex):
     def _write_term_dict(self, term_dict, index):
         """Write in-memory term dictionary in sorted termID order."""
         for term_id in sorted(term_dict.keys()):
-            doc_tf = term_dict[term_id]
-            sorted_doc_id = sorted(doc_tf.keys())
-            assoc_tf = [doc_tf[doc_id] for doc_id in sorted_doc_id]
-            index.append(term_id, sorted_doc_id, assoc_tf)
+            doc_positions = term_dict[term_id]
+            sorted_doc_id = sorted(doc_positions.keys())
+            assoc_positions = [doc_positions[doc_id] for doc_id in sorted_doc_id]
+            assoc_tf = [len(positions) for positions in assoc_positions]
+            index.append(term_id, sorted_doc_id, assoc_tf, assoc_positions)
 
     def _flush_spimi_run(self, term_dict, run_id):
         """Flush one SPIMI run to disk and clear in-memory dictionary."""
@@ -528,7 +678,7 @@ class SPIMIIndex(BSBIIndex):
             for docname in self._iter_block_documents(block_dir_relative):
                 doc_id = self.doc_id_map[docname]
                 with open(docname, "r", encoding = "utf8", errors = "surrogateescape") as f:
-                    for token in f.read().split():
+                    for position, token in enumerate(f.read().split(), start = 1):
                         term_id = self.term_id_map[token]
 
                         should_flush = (
@@ -543,8 +693,8 @@ class SPIMIIndex(BSBIIndex):
                             term_dict[term_id] = {}
 
                         if doc_id not in term_dict[term_id]:
-                            term_dict[term_id][doc_id] = 0
-                        term_dict[term_id][doc_id] += 1
+                            term_dict[term_id][doc_id] = []
+                        term_dict[term_id][doc_id].append(position)
 
         self._flush_spimi_run(term_dict, run_id)
         self.save()

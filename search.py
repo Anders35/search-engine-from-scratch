@@ -8,10 +8,12 @@ def parse_args():
     parser.add_argument('--compression', default='elias-gamma',
                         choices=['standard', 'vbe', 'elias-gamma'],
                         help='Postings compression type used when reading the index')
-    parser.add_argument('--scoring', default='bm25', choices=['tfidf', 'bm25'],
+    parser.add_argument('--scoring', default='bm25', choices=['tfidf', 'bm25', 'phrase', 'proximity'],
                         help='Retrieval scoring scheme')
     parser.add_argument('--bm25', default='wand', choices=['wand', 'taat'],
                         help='BM25 retrieval mode')
+    parser.add_argument('--window', type=int, default=5,
+                        help='Maximum positional window for proximity search')
     parser.add_argument('-k', type=int, default=10, help='Top-K documents')
     return parser.parse_args()
 
@@ -36,8 +38,14 @@ def main():
         for (score, doc) in BSBI_instance.retrieve(query,
                                                    k = args.k,
                                                    scoring = args.scoring,
-                                                   use_wand = use_wand):
-            print(f"{doc:30} {score:>.3f}")
+                                                   use_wand = use_wand,
+                                                   window = args.window):
+            if args.scoring == 'phrase':
+                print(f"{doc:30} phrase_tf={score}")
+            elif args.scoring == 'proximity':
+                print(f"{doc:30} proximity_score={score:>.3f}")
+            else:
+                print(f"{doc:30} {score:>.3f}")
         print()
 
 
