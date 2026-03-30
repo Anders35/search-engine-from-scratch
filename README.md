@@ -3,6 +3,7 @@
 ## Features
 
 - SPIMI-based indexing pipeline (default), with optional BSBI compatibility mode.
+- Term dictionary organized with a Finite State Transducer (FST) for term -> termID mapping.
 - Multiple postings compression options:
   - Standard (raw integer array)
   - Variable-Byte Encoding (VBE)
@@ -25,7 +26,7 @@
 - `evaluation.py`: Evaluate retrieval quality using `queries.txt` and `qrels.txt`.
 - `index.py`: Disk-based inverted index reader/writer.
 - `compression.py`: Postings compression codecs.
-- `util.py`: Utilities (ID mapping, postings merge helper).
+- `util.py`: Utilities (IdMap, FSTTermMap, postings merge helper).
 - `collection/`: Document collection (grouped by blocks/folders).
 - `index/`: Output index files (`*.index`, `*.dict`).
 

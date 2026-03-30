@@ -7,7 +7,7 @@ import math
 import argparse
 
 from index import InvertedIndexReader, InvertedIndexWriter
-from util import IdMap, sorted_merge_posts_and_tfs
+from util import IdMap, FSTTermMap, sorted_merge_posts_and_tfs
 from compression import StandardPostings, VBEPostings, EliasGammaPostings
 from tqdm import tqdm
 
@@ -29,7 +29,7 @@ class BSBIIndex:
     """
     Attributes
     ----------
-    term_id_map(IdMap): Maps terms to termIDs
+    term_id_map(FSTTermMap): Maps terms to termIDs using FST
     doc_id_map(IdMap): Maps relative document paths (e.g.,
                     /collection/0/gamma.txt) to docIDs
     data_dir(str): Path to collection data
@@ -39,7 +39,7 @@ class BSBIIndex:
     index_name(str): Inverted index file name
     """
     def __init__(self, data_dir, output_dir, postings_encoding, index_name = "main_index"):
-        self.term_id_map = IdMap()
+        self.term_id_map = FSTTermMap()
         self.doc_id_map = IdMap()
         self.data_dir = data_dir
         self.output_dir = output_dir
@@ -62,6 +62,8 @@ class BSBIIndex:
 
         with open(os.path.join(self.output_dir, 'terms.dict'), 'rb') as f:
             self.term_id_map = pickle.load(f)
+            if isinstance(self.term_id_map, IdMap):
+                self.term_id_map = FSTTermMap.from_id_list(self.term_id_map.id_to_str)
         with open(os.path.join(self.output_dir, 'docs.dict'), 'rb') as f:
             self.doc_id_map = pickle.load(f)
 
@@ -158,9 +160,12 @@ class BSBIIndex:
 
     def _get_query_term_ids(self, query):
         """Return term IDs that actually exist in the index vocabulary."""
-        return [self.term_id_map.str_to_id[word]
-                for word in query.split()
-                if word in self.term_id_map.str_to_id]
+        term_ids = []
+        for word in query.split():
+            term_id = self.term_id_map.get_id_if_exists(word)
+            if term_id is not None:
+                term_ids.append(term_id)
+        return term_ids
 
     @staticmethod
     def _bm25_term_score(tf, dl, avg_dl, idf, k1, b):
